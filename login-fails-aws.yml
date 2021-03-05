@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Aws log in fails alerts.
+Parameters:
+  SnsTopicName:
+    Description: Name of Sns Topic
+    Type: String
+    Default: aws-failed-login
+    AllowedPattern: '.+'
+      
+  SubscriptionEndpoint:
+    Description: The endpoint(Lambda) that receives notifications from the Amazon SNS topic
+    Type: String
+    Default: arn:aws:lambda:eu-west-2:388977026220:function:c360-eu-west-2-teams-webhook-lambda
+        
+  SubscriptionProtocol:
+    Description: The Subscription's Protocol
+    Type: String
+    Default: lambda
+    AllowedValues: 
+      - email
+      - email-json
+      - sms
+      - https
+      - sqs
+      - sms
+      - lambda
+
+  TargetId:
+    Description: The name of Sns topic to be added as the target in CloudWatch events.
+    Type: String
+    Default: aws_failed_login
+
+  EventRuleName:
+    Description: The name of the event rule
+    Type: String
+    Default: aws_failed_login_rule
+
+Resources:
+  SnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !Ref SubscriptionEndpoint
+          Protocol: !Ref SubscriptionProtocol
+      TopicName: !Ref SnsTopicName
+
+  EventRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: When AWS IAM users log in fail to account, a notification is sent. 
+      EventPattern:
+        detail-type:
+          - AWS Console Sign In via CloudTrail
+        detail:
+          eventName:
+            - ConsoleLogin
+          errorMessage:
+            - Failed authentication
+      Name: !Ref EventRuleName
+      State: ENABLED
+      Targets: 
+        - 
+          Arn: !Ref SnsTopic
+          Id: !Ref TargetId
+          InputTransformer:
+            InputPathsMap:
+              UserType: "$.detail.userIdentity.type"
+              UserName: "$.detail.userIdentity.userName"
+              AccountId: "$.detail.userIdentity.accountId"
+              Region: "$.detail.awsRegion"
+              IpAddress: "$.detail.sourceIPAddress"
+              EventTime: "$.detail.eventTime"
+              EventSource: "$.detail.eventSource"
+              ConsoleLoginStatus: "$.detail.responseElements.ConsoleLogin"
+              MFAUsed: "$.detail.additionalEventData.MFAUsed"
+              UserAgent: "$.detail.userAgent"
+            InputTemplate: |  
+                            "Account Alert - An user login failed with following details:"
+                            "UserType: <UserType>."
+                            "UserName: <UserName>."
+                            "AccountId: <AccountId>."
+                            "Region: <Region>."
+                            "IpAddress: <IpAddress>."
+                            "EventTime: <EventTime>."
+                            "EventSource: <EventSource>."
+                            "ConsoleLoginStatus: <ConsoleLoginStatus>."
+                            "MFAUsed: <MFAUsed>."
+                            "UserAgent: <UserAgent>."
+
+  EventTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref SnsTopic
+      Topics:
+        - !Ref SnsTopic
+
+  LambdaFunctionInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref SubscriptionEndpoint
+      Principal: sns.amazonaws.com 
+      SourceArn: !Ref SnsTopic
