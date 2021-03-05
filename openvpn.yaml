@@ -1,0 +1,230 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Establishes an OpenVpn server in a VPC.
+Metadata:
+ 'AWS::CloudFormation::Interface':
+   ParameterGroups:
+   - Label:
+       default: 'General and VPC details'
+     Parameters:
+     - Prefix 
+     - Environment
+     - Department
+     - VpcStackName
+     - VpcSubnet
+   - Label:
+       default: 'OpenVpn EC2 details'
+     Parameters:   
+     - InstanceType
+     - SshKeyName
+     - ServerUsername
+     - ServerPassword
+     - OpenVpnUserUIPort
+     - OpenVpnUserUIProtocol
+     - OpenVpnAdminUIPort
+     - OpenVpnAdminUIProtocol
+     - OpenVpnClientPort
+     - OpenVpnClientProtocol
+
+Parameters:
+  Prefix:
+    Description: Provide a string that will be used as prefix for Name tag.
+    Type: String
+    Default: c360
+    AllowedPattern: '.+'
+  
+  Environment:
+    Description: Provide the environment name. Value will be used in the Name and Environment tags
+    Type: String
+    Default: shared-services
+    AllowedPattern: '.+'
+  
+  Department:
+    Description: Department Name. Value will be used for Department tag
+    Type: String
+    Default: GDM
+    AllowedPattern: '.+'
+
+  VpcStackName:
+    Description: VPC stack name. Values for VPC ID, subnets, Cidr blocks will be taken from the stack
+    Type: String
+    Default: shared-services-stg-vpc 
+    AllowedPattern: '.+'
+
+  VpcSubnet:
+    Description: The public subnet in a VPC 
+    Type: String
+    Default: PublicSubnet1
+
+  InstanceType:
+    Description: Instance Type for OpenVpn Server
+    Type: String 
+    AllowedValues:
+     - t2.micro
+     - t2.small
+     - t2.medium
+     - m3.medium
+     - m3.large
+     - m3.xlarge
+     - m3.2xlarge
+    Default: t2.micro
+
+  SshKeyName: 
+    Description: Name of an EC2 KeyPair to SSH to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: openvpn
+
+  ServerUsername:
+    Description: OpenVpn server admin username 
+    Type: String
+    Default: openvpn
+
+  ServerPassword:
+    Description: OpenVpn server admin password
+    Type: String 
+    NoEcho: true 
+    MinLength: 14
+    MaxLength: 32    
+    ConstraintDescription: Must be at least 14 characters long
+
+  OpenVpnUserUIPort:
+    Description: OpenVpn as users UI access Port
+    Type: Number
+    Default: 443
+
+  OpenVpnUserUIProtocol:
+    Description: OpenVpn as users UI access Protocol
+    Type: String
+    Default: tcp
+
+  OpenVpnAdminUIPort:
+    Description: OpenVpn as admin UI Port
+    Type: Number
+    Default: 943
+
+  OpenVpnAdminUIProtocol:
+    Description: OpenVpn as admin UI Protocol
+    Type: String
+    Default: tcp
+
+  OpenVpnClientPort:
+    Description: OpenVpn client Port
+    Type: Number
+    Default: 1194
+
+  OpenVpnClientProtocol:
+    Description: OpenVpn client Protocol
+    Type: String
+    AllowedValues:
+     - udp
+     - tcp
+    Default: udp
+
+Mappings:
+  RegionMap:
+    us-gov-west-1:
+      AMI: ami-0eaf3c8123abf49df
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: 
+       Fn::ImportValue: !Sub ${VpcStackName}-VpcId
+      GroupDescription: Security group for OpenVpn Server
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ !Ref Prefix, !Ref Environment, 'OpenVpnSg' ] ]
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Department
+          Value: !Ref Department
+      SecurityGroupIngress:
+      - Description: Allow handle incoming tunnel connections
+        IpProtocol: !Ref OpenVpnUserUIProtocol
+        FromPort: !Ref OpenVpnUserUIPort
+        ToPort: !Ref OpenVpnUserUIPort
+        CidrIp: 0.0.0.0/0
+
+      - Description: Allow forward incoming requests to web service 
+        IpProtocol: !Ref OpenVpnAdminUIProtocol
+        FromPort: !Ref OpenVpnAdminUIPort
+        ToPort: !Ref OpenVpnAdminUIPort
+        CidrIp: 0.0.0.0/0
+
+      - Description: Allow access to OpenVpn Client from Cepheid Solna
+        IpProtocol: !Ref OpenVpnClientProtocol
+        FromPort: !Ref OpenVpnClientPort
+        ToPort: !Ref OpenVpnClientPort
+        CidrIp: 82.99.11.116/32  
+      - Description: Allow access to OpenVpn Client from Cepheid US
+        IpProtocol: !Ref OpenVpnClientProtocol
+        FromPort: !Ref OpenVpnClientPort 
+        ToPort: !Ref OpenVpnClientPort
+        CidrIp: 207.141.15.132/30
+      - Description: Allow access to OpenVpn Client from Cepheid US
+        IpProtocol: !Ref OpenVpnClientProtocol
+        FromPort: !Ref OpenVpnClientPort
+        ToPort: !Ref OpenVpnClientPort
+        CidrIp: 12.24.32.13/32
+      - Description: Allow access to OpenVpn Client from Cepheid US
+        IpProtocol: !Ref OpenVpnClientProtocol
+        FromPort: !Ref OpenVpnClientPort
+        ToPort: !Ref OpenVpnClientPort
+        CidrIp: 12.0.203.4/31
+  
+  # Allocate an Elastic IP address from a public IPv4 address pool.
+  EIpAddress:
+    Description: EIp to assign to EC2
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  
+  # Launch an OpenVpn EC2 instance in a VPC public subnet.  
+  OpenVpnInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: EIpAddress
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref AWS::Region, AMI]
+      InstanceType: !Ref InstanceType
+      SecurityGroupIds: 
+      - !Ref SecurityGroup
+      SubnetId: 
+        Fn::ImportValue: !Sub ${VpcStackName}-${VpcSubnet}
+      KeyName: !Ref SshKeyName
+      SourceDestCheck: false
+      Tags:
+       - Key: Name
+         Value: !Sub ${Prefix}-${Environment}-OpenVpn
+       - Key: Environment
+         Value: !Ref Environment
+       - Key: Department
+         Value: !Ref Department
+      UserData:
+        Fn::Base64: 
+          !Sub |
+            #!/bin/bash -xe
+            public_hostname=${EIpAddress}
+            admin_user=${ServerUsername}
+            admin_pw=${ServerPassword} 
+            # install Certbot in order to genegate a Cert to upload to OpenVpn server  
+            sudo apt-get update
+            sudo apt-get install -y software-properties-common
+            sudo add-apt-repository -y universe
+            sudo add-apt-repository -y ppa:certbot/certbot
+            sudo apt-get update
+            sudo apt-get install -y certbot   
+  
+  # Assign Elastic IP to instance 
+  IpAssociaton:
+    Type: AWS::EC2::EIPAssociation
+    DependsOn: OpenVpnInstance
+    Properties:
+      AllocationId: !GetAtt EIpAddress.AllocationId
+      InstanceId: !Ref OpenVpnInstance
+
+Outputs:
+  SecurityGroup:
+    Description: OpenVpn security group
+    Value: !Ref SecurityGroup
+    Export:
+      Name: !Sub ${VpcStackName}-OpenVpnSg
